@@ -41,6 +41,33 @@ def create_discount_code(customer_id, order_id):
         print("Error:", response.text)
         return None
 
+def save_discount_to_metafield(customer_id, discount_code):
+    metafield_payload = {
+        "metafield": {
+            "namespace": "dog_dollars",
+            "key": "discount_code",
+            "value": discount_code,
+            "type": "single_line_text_field"
+        }
+    }
+
+    url = f"https://{SHOP_NAME}/admin/api/2023-10/customers/{customer_id}/metafields.json"
+
+    headers = {
+        "X-Shopify-Access-Token": ADMIN_API_TOKEN,
+        "Content-Type": "application/json"
+    }
+
+    response = requests.post(url, json=metafield_payload, headers=headers)
+
+    if response.status_code == 201:
+        print("Metafield saved!")
+    else:
+        print("Failed to save metafield:", response.text)
+
+
+
+
 @app.route("/generate-code", methods=["POST"])
 def generate_code():
     data = request.get_json()
