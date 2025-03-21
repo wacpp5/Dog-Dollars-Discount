@@ -112,7 +112,8 @@ def generate_code():
     update_dog_dollars(customer_id, new_balance, metafield_id)
 
     # Create discount if eligible
-       if new_balance >= 125:
+    # Create discount if eligible
+    if new_balance >= 125:
         code = create_discount_code(customer_id, order_id)
         if code:
             # Subtract 125 and update
@@ -123,6 +124,7 @@ def generate_code():
         else:
             # Could not create code, still return updated balance
             return jsonify({"success": False, "error": "Failed to create discount code", "dog_dollars": new_balance})
+
 
 
     return jsonify({"success": True, "dog_dollars": new_balance})
