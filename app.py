@@ -5,10 +5,10 @@ import os
 
 app = Flask(__name__)
 
-# Replace with your actual shop name and admin API token
-SHOP_NAME = "569ea5-3"
-ADMIN_API_TOKEN = "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"
-PRICE_RULE_ID = "1546589307186"
+# Load sensitive values from environment variables
+SHOP_NAME = os.environ.get("SHOP_NAME")
+ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN")
+PRICE_RULE_ID = os.environ.get("PRICE_RULE_ID")
 
 # Shopify API endpoints
 SHOPIFY_API_URL = f"https://{SHOP_NAME}.myshopify.com/admin/api/2023-10"
@@ -41,15 +41,6 @@ def get_dog_dollars_balance(metafields):
         if metafield["namespace"] == DOG_DOLLARS_NAMESPACE and metafield["key"] == DOG_DOLLARS_KEY:
             return int(metafield["value"]), metafield["id"]
     return 0, None
-
-def ensure_customer_metafields_exist(customer_id):
-    metafields = get_metafields(customer_id)
-    keys_found = {mf["key"] for mf in metafields if mf["namespace"] == DOG_DOLLARS_NAMESPACE}
-
-    if DOG_DOLLARS_KEY not in keys_found:
-        update_dog_dollars(customer_id, 0)
-    if DISCOUNT_CODE_KEY not in keys_found:
-        save_discount_code_to_customer(customer_id, "")
 
 def update_dog_dollars(customer_id, new_balance, metafield_id=None):
     data = {
@@ -112,8 +103,6 @@ def generate_code():
     customer_id = get_customer_numeric_id(raw_customer_id)
     order_id = get_order_numeric_id(raw_order_id)
 
-    ensure_customer_metafields_exist(customer_id)
-
     # Fetch existing dog dollars
     metafields = get_metafields(customer_id)
     current_balance, metafield_id = get_dog_dollars_balance(metafields)
@@ -132,6 +121,7 @@ def generate_code():
             save_discount_code_to_customer(customer_id, code)
             return jsonify({"success": True, "code": code, "dog_dollars": final_balance})
         else:
+            # Could not create code, still return updated balance
             return jsonify({"success": False, "error": "Failed to create discount code", "dog_dollars": new_balance})
 
     return jsonify({"success": True, "dog_dollars": new_balance})
