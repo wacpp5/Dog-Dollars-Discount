@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: dog-dollars-generator
+    env: python
+    buildCommand: ""
+    startCommand: python app.py
+    envVars:
+      - key: SHOP_NAME
+        value: yourstore.myshopify.com
+      - key: ADMIN_API_TOKEN
+        value: your_admin_token_here
+      - key: PRICE_RULE_ID
+        value: your_price_rule_id
