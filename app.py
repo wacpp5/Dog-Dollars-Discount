@@ -24,12 +24,6 @@ headers = {
     "Content-Type": "application/json"
 }
 
-def get_customer_numeric_id(customer_gid):
-    return customer_gid.split("/")[-1]
-
-def get_order_numeric_id(order_gid):
-    return order_gid.split("/")[-1]
-
 def get_metafields(customer_id):
     response = requests.get(CUSTOMER_METAFIELDS_URL(customer_id), headers=headers)
     if response.status_code == 200:
@@ -100,8 +94,9 @@ def generate_code():
     raw_order_id = data.get("order_id")
     earned_dog_dollars = int(data.get("dog_dollars", 0))
 
-    customer_id = get_customer_numeric_id(raw_customer_id)
-    order_id = get_order_numeric_id(raw_order_id)
+customer_id = str(raw_customer_id)
+order_id = str(raw_order_id)
+
 
     # Fetch existing dog dollars
     metafields = get_metafields(customer_id)
