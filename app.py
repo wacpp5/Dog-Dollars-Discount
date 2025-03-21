@@ -75,9 +75,12 @@ def generate_code():
     order_id = data.get("order_id")
     dog_dollars = int(data.get("dog_dollars", 0))
 
-    if dog_dollars >= 125:
-        code = create_discount_code(customer_id, order_id)
-        return jsonify({"success": True, "code": code})
+if dog_dollars >= 125:
+    code = create_discount_code(customer_id, order_id)
+    if code:
+        save_discount_to_metafield(customer_id, code)
+    return jsonify({"success": True, "code": code})
+
     else:
         return jsonify({"success": False, "message": "Not enough Dog Dollars"})
 
