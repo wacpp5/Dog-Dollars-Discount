@@ -94,8 +94,8 @@ def generate_code():
     raw_order_id = data.get("order_id")
     earned_dog_dollars = int(data.get("dog_dollars", 0))
 
-customer_id = str(raw_customer_id)
-order_id = str(raw_order_id)
+    customer_id = str(raw_customer_id)
+    order_id = str(raw_order_id)
 
 
     # Fetch existing dog dollars
