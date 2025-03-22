@@ -5,10 +5,10 @@ import os
 
 app = Flask(__name__)
 
-# Load sensitive variables from environment
-SHOP_NAME = os.environ.get("SHOP_NAME")
-ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN")
-PRICE_RULE_ID = os.environ.get("PRICE_RULE_ID")
+# Environment variables
+SHOP_NAME = os.getenv("SHOP_NAME")
+ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN")
+PRICE_RULE_ID = os.getenv("PRICE_RULE_ID")
 
 # Shopify API endpoints
 SHOPIFY_API_URL = f"https://{SHOP_NAME}.myshopify.com/admin/api/2023-10"
@@ -25,14 +25,10 @@ headers = {
 }
 
 def get_customer_numeric_id(customer_gid):
-    if isinstance(customer_gid, str) and "/" in customer_gid:
-        return customer_gid.split("/")[-1]
-    return str(customer_gid)
+    return str(customer_gid).split("/")[-1]
 
 def get_order_numeric_id(order_gid):
-    if isinstance(order_gid, str) and "/" in order_gid:
-        return order_gid.split("/")[-1]
-    return str(order_gid)
+    return str(order_gid).split("/")[-1]
 
 def get_metafields(customer_id):
     response = requests.get(CUSTOMER_METAFIELDS_URL(customer_id), headers=headers)
@@ -55,15 +51,12 @@ def update_dog_dollars(customer_id, new_balance, metafield_id=None):
             "value": str(new_balance)
         }
     }
-
     if metafield_id:
         url = f"{SHOPIFY_API_URL}/metafields/{metafield_id}.json"
         response = requests.put(url, headers=headers, json=data)
     else:
         url = CUSTOMER_METAFIELDS_URL(customer_id)
         response = requests.post(url, headers=headers, json=data)
-
-    print("Metafield update response:", response.status_code, response.text)
     return response.status_code in [200, 201]
 
 def save_discount_code_to_customer(customer_id, code):
@@ -110,15 +103,19 @@ def generate_code():
     customer_id = get_customer_numeric_id(raw_customer_id)
     order_id = get_order_numeric_id(raw_order_id)
 
+    # Fetch existing dog dollars
     metafields = get_metafields(customer_id)
     current_balance, metafield_id = get_dog_dollars_balance(metafields)
     new_balance = current_balance + earned_dog_dollars
 
+    # Update dog dollars
     update_dog_dollars(customer_id, new_balance, metafield_id)
 
+    # Create discount if eligible
     if new_balance >= 125:
         code = create_discount_code(customer_id, order_id)
         if code:
+            # Subtract 125 and update again
             final_balance = new_balance - 125
             update_dog_dollars(customer_id, final_balance, metafield_id)
             save_discount_code_to_customer(customer_id, code)
