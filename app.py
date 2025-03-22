@@ -5,13 +5,16 @@ import os
 
 app = Flask(__name__)
 
+# Load environment variables
 SHOP_NAME = os.environ.get("SHOP_NAME")
 ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN")
 PRICE_RULE_ID = os.environ.get("PRICE_RULE_ID")
 
+# Shopify API endpoints
 SHOPIFY_API_URL = f"https://{SHOP_NAME}.myshopify.com/admin/api/2023-10"
 CUSTOMER_METAFIELDS_URL = lambda cid: f"{SHOPIFY_API_URL}/customers/{cid}/metafields.json"
 
+# Metafield namespace/key
 DOG_DOLLARS_NAMESPACE = "loyalty"
 DOG_DOLLARS_KEY = "dog_dollars"
 DISCOUNT_CODE_KEY = "last_discount_code"
@@ -23,10 +26,10 @@ headers = {
 }
 
 def get_customer_numeric_id(customer_gid):
-    return customer_gid.split("/")[-1] if isinstance(customer_gid, str) else str(customer_gid)
+    return str(customer_gid).split("/")[-1]
 
 def get_order_numeric_id(order_gid):
-    return order_gid.split("/")[-1] if isinstance(order_gid, str) else str(order_gid)
+    return str(order_gid).split("/")[-1]
 
 def get_metafields(customer_id):
     response = requests.get(CUSTOMER_METAFIELDS_URL(customer_id), headers=headers)
@@ -57,67 +60,37 @@ def update_dog_dollars(customer_id, new_balance, metafield_id=None):
         response = requests.post(url, headers=headers, json=data)
     return response.status_code in [200, 201]
 
-def get_existing_discount_codes(metafields):
-    for metafield in metafields:
-        if metafield["namespace"] == DOG_DOLLARS_NAMESPACE and metafield["key"] == DISCOUNT_CODE_KEY:
-            return metafield["value"].split("\n"), metafield["id"]
-    return [], None
+def update_metafield_by_id(metafield_id, value):
+    data = {
+        "metafield": {
+            "id": metafield_id,
+            "value": value,
+            "type": "multi_line_text_field"
+        }
+    }
+    url = f"{SHOPIFY_API_URL}/metafields/{metafield_id}.json"
+    requests.put(url, headers=headers, json=data)
 
 def save_discount_code_to_customer(customer_id, code):
     metafields = get_metafields(customer_id)
-    existing_codes, metafield_id = get_existing_discount_codes(metafields)
-    existing_codes.append(code)
-    combined_codes = "\n".join(existing_codes)
+    for metafield in metafields:
+        if metafield["namespace"] == DOG_DOLLARS_NAMESPACE and metafield["key"] == DISCOUNT_CODE_KEY:
+            current_value = metafield["value"]
+            metafield_id = metafield["id"]
+            updated_value = current_value + "\n" + code if current_value else code
+            update_metafield_by_id(metafield_id, updated_value)
+            return
+    # Create new metafield if not found
     data = {
         "metafield": {
             "namespace": DOG_DOLLARS_NAMESPACE,
             "key": DISCOUNT_CODE_KEY,
             "type": "multi_line_text_field",
-            "value": combined_codes
+            "value": code
         }
     }
-    if metafield_id:
-        url = f"{SHOPIFY_API_URL}/metafields/{metafield_id}.json"
-        requests.put(url, headers=headers, json=data)
-    else:
-        url = CUSTOMER_METAFIELDS_URL(customer_id)
-        requests.post(url, headers=headers, json=data)
-
-def move_code_to_used(customer_id, code):
-    metafields = get_metafields(customer_id)
-    # Remove from active codes
-    active_codes, active_id = get_existing_discount_codes(metafields)
-    active_codes = [c for c in active_codes if c != code]
-    updated_active = "\n".join(active_codes)
-    if active_id:
-        requests.put(f"{SHOPIFY_API_URL}/metafields/{active_id}.json", headers=headers, json={
-            "metafield": {
-                "namespace": DOG_DOLLARS_NAMESPACE,
-                "key": DISCOUNT_CODE_KEY,
-                "type": "multi_line_text_field",
-                "value": updated_active
-            }
-        })
-    # Append to used codes
-    used_codes = ""
-    used_id = None
-    for metafield in metafields:
-        if metafield["namespace"] == DOG_DOLLARS_NAMESPACE and metafield["key"] == USED_CODES_KEY:
-            used_codes = metafield["value"]
-            used_id = metafield["id"]
-    new_used = used_codes + ("\n" if used_codes else "") + code
-    data = {
-        "metafield": {
-            "namespace": DOG_DOLLARS_NAMESPACE,
-            "key": USED_CODES_KEY,
-            "type": "multi_line_text_field",
-            "value": new_used
-        }
-    }
-    if used_id:
-        requests.put(f"{SHOPIFY_API_URL}/metafields/{used_id}.json", headers=headers, json=data)
-    else:
-        requests.post(CUSTOMER_METAFIELDS_URL(customer_id), headers=headers, json=data)
+    url = CUSTOMER_METAFIELDS_URL(customer_id)
+    requests.post(url, headers=headers, json=data)
 
 def create_discount_code(customer_id, order_id):
     unique_code = f"DOG-{customer_id}-{order_id}"
@@ -151,38 +124,65 @@ def generate_code():
     customer_id = get_customer_numeric_id(raw_customer_id)
     order_id = get_order_numeric_id(raw_order_id)
 
+    # Fetch existing dog dollars
     metafields = get_metafields(customer_id)
     current_balance, metafield_id = get_dog_dollars_balance(metafields)
     new_balance = current_balance + earned_dog_dollars
 
+    # Update dog dollars
     update_dog_dollars(customer_id, new_balance, metafield_id)
 
-    codes = []
+    codes_issued = []
     while new_balance >= 125:
         code = create_discount_code(customer_id, order_id)
         if code:
-            save_discount_code_to_customer(customer_id, code)
             new_balance -= 125
+            update_dog_dollars(customer_id, new_balance)
+            save_discount_code_to_customer(customer_id, code)
+            codes_issued.append(code)
         else:
-            return jsonify({"success": False, "error": "Failed to create discount code", "dog_dollars": new_balance, "codes": codes})
-        codes.append(code)
+            break
 
-    update_dog_dollars(customer_id, new_balance)
+    return jsonify({
+        "success": True,
+        "dog_dollars": new_balance,
+        "codes": codes_issued
+    })
 
-    return jsonify({"success": True, "dog_dollars": new_balance, "codes": codes})
-
-@app.route("/webhook/redeemed", methods=["POST"])
-def webhook_redeemed():
+@app.route("/mark-used", methods=["POST"])
+def mark_code_used():
     data = request.get_json()
-    try:
-        discount_codes = data.get("discount_codes", [])
-        customer_id = get_customer_numeric_id(data.get("customer")['id'])
-        for dc in discount_codes:
-            if dc.get("code", "").startswith("DOG-"):
-                move_code_to_used(customer_id, dc["code"])
-        return jsonify({"status": "ok"})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 400
+    discount_code = data.get("discount_code")
+    customer_id = str(data.get("customer_id"))
+
+    metafields = get_metafields(customer_id)
+    active_id = None
+    used_id = None
+    active_codes = ""
+    used_codes = ""
+
+    for metafield in metafields:
+        if metafield["namespace"] == DOG_DOLLARS_NAMESPACE:
+            if metafield["key"] == DISCOUNT_CODE_KEY:
+                active_id = metafield["id"]
+                active_codes = metafield["value"]
+            elif metafield["key"] == USED_CODES_KEY:
+                used_id = metafield["id"]
+                used_codes = metafield["value"]
+
+    updated_active_codes = "\n".join([
+        line for line in active_codes.split("\n")
+        if not line.strip().startswith(discount_code)
+    ])
+
+    timestamp = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')
+    new_used_entry = f"{discount_code} | Used on {timestamp}"
+    updated_used_codes = used_codes + "\n" + new_used_entry if used_codes else new_used_entry
+
+    update_metafield_by_id(active_id, updated_active_codes)
+    update_metafield_by_id(used_id, updated_used_codes)
+
+    return jsonify({"success": True, "message": "Discount code marked as used"})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
