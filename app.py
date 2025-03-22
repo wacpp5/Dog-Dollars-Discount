@@ -5,7 +5,7 @@ import os
 
 app = Flask(__name__)
 
-# Load sensitive values from environment variables
+# Use environment variables for sensitive data
 SHOP_NAME = os.environ.get("SHOP_NAME")
 ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN")
 PRICE_RULE_ID = os.environ.get("PRICE_RULE_ID")
@@ -23,6 +23,12 @@ headers = {
     "X-Shopify-Access-Token": ADMIN_API_TOKEN,
     "Content-Type": "application/json"
 }
+
+def get_customer_numeric_id(customer_gid):
+    return str(customer_gid).split("/")[-1]
+
+def get_order_numeric_id(order_gid):
+    return str(order_gid).split("/")[-1]
 
 def get_metafields(customer_id):
     response = requests.get(CUSTOMER_METAFIELDS_URL(customer_id), headers=headers)
@@ -94,9 +100,8 @@ def generate_code():
     raw_order_id = data.get("order_id")
     earned_dog_dollars = int(data.get("dog_dollars", 0))
 
-    customer_id = str(raw_customer_id)
-    order_id = str(raw_order_id)
-
+    customer_id = get_customer_numeric_id(raw_customer_id)
+    order_id = get_order_numeric_id(raw_order_id)
 
     # Fetch existing dog dollars
     metafields = get_metafields(customer_id)
@@ -110,13 +115,11 @@ def generate_code():
     if new_balance >= 125:
         code = create_discount_code(customer_id, order_id)
         if code:
-            # Subtract 125 and update
             final_balance = new_balance - 125
-            update_dog_dollars(customer_id, final_balance)
+            update_dog_dollars(customer_id, final_balance, metafield_id)
             save_discount_code_to_customer(customer_id, code)
             return jsonify({"success": True, "code": code, "dog_dollars": final_balance})
         else:
-            # Could not create code, still return updated balance
             return jsonify({"success": False, "error": "Failed to create discount code", "dog_dollars": new_balance})
 
     return jsonify({"success": True, "dog_dollars": new_balance})
