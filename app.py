@@ -2,23 +2,22 @@ from flask import Flask, request, jsonify
 import requests
 import datetime
 import os
-import json
 
 app = Flask(__name__)
 
-# Use environment variables for security
-SHOP_NAME = os.environ.get("SHOP_NAME")
+# Environment variables for security
+SHOP_NAME = os.environ.get("SHOP_NAME")  # e.g., 'your-store-name'
 ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN")
-PRICE_RULE_ID = os.environ.get("PRICE_RULE_ID")
+PRICE_RULE_ID = os.environ.get("PRICE_RULE_ID")  # e.g., the ID for your 10% off rule
 
-# Shopify API endpoints
+# Shopify API base URL
 SHOPIFY_API_URL = f"https://{SHOP_NAME}.myshopify.com/admin/api/2023-10"
 CUSTOMER_METAFIELDS_URL = lambda cid: f"{SHOPIFY_API_URL}/customers/{cid}/metafields.json"
 
-# Metafield namespace/key
+# Metafield keys
 DOG_DOLLARS_NAMESPACE = "loyalty"
 DOG_DOLLARS_KEY = "dog_dollars"
-DISCOUNT_CODE_KEY = "discount_codes"
+DISCOUNT_CODE_KEY = "last_discount_code"
 
 headers = {
     "X-Shopify-Access-Token": ADMIN_API_TOKEN,
@@ -26,14 +25,10 @@ headers = {
 }
 
 def get_customer_numeric_id(customer_gid):
-    if isinstance(customer_gid, str) and "gid://" in customer_gid:
-        return customer_gid.split("/")[-1]
-    return str(customer_gid)
+    return customer_gid.split("/")[-1] if isinstance(customer_gid, str) else str(customer_gid)
 
 def get_order_numeric_id(order_gid):
-    if isinstance(order_gid, str) and "gid://" in order_gid:
-        return order_gid.split("/")[-1]
-    return str(order_gid)
+    return order_gid.split("/")[-1] if isinstance(order_gid, str) else str(order_gid)
 
 def get_metafields(customer_id):
     response = requests.get(CUSTOMER_METAFIELDS_URL(customer_id), headers=headers)
@@ -41,58 +36,28 @@ def get_metafields(customer_id):
         return response.json().get("metafields", [])
     return []
 
-def get_dog_dollars_balance(metafields):
+def get_metafield_value_and_id(metafields, key):
     for metafield in metafields:
-        if metafield["namespace"] == DOG_DOLLARS_NAMESPACE and metafield["key"] == DOG_DOLLARS_KEY:
-            return int(metafield["value"]), metafield["id"]
-    return 0, None
+        if metafield["namespace"] == DOG_DOLLARS_NAMESPACE and metafield["key"] == key:
+            return metafield["value"], metafield["id"]
+    return None, None
 
-def get_discount_codes(metafields):
-    for metafield in metafields:
-        if metafield["namespace"] == DOG_DOLLARS_NAMESPACE and metafield["key"] == DISCOUNT_CODE_KEY:
-            return metafield.get("value", "").splitlines(), metafield["id"]
-    return [], None
-
-def update_dog_dollars(customer_id, new_balance, metafield_id=None):
+def update_metafield(customer_id, key, value, metafield_type, metafield_id=None):
     data = {
         "metafield": {
             "namespace": DOG_DOLLARS_NAMESPACE,
-            "key": DOG_DOLLARS_KEY,
-            "type": "number_integer",
-            "value": str(new_balance)
+            "key": key,
+            "type": metafield_type,
+            "value": value
         }
     }
     if metafield_id:
         url = f"{SHOPIFY_API_URL}/metafields/{metafield_id}.json"
-        return requests.put(url, headers=headers, json=data)
+        response = requests.put(url, headers=headers, json=data)
     else:
         url = CUSTOMER_METAFIELDS_URL(customer_id)
-        return requests.post(url, headers=headers, json=data)
-
-def save_discount_code_to_customer(customer_id, new_code):
-    metafields = get_metafields(customer_id)
-    existing_codes, metafield_id = get_discount_codes(metafields)
-
-    if new_code not in existing_codes:
-        existing_codes.append(new_code)
-
-    formatted_value = "\n".join(existing_codes)
-
-    data = {
-        "metafield": {
-            "namespace": DOG_DOLLARS_NAMESPACE,
-            "key": DISCOUNT_CODE_KEY,
-            "type": "multi_line_text_field",
-            "value": formatted_value
-        }
-    }
-
-    if metafield_id:
-        url = f"{SHOPIFY_API_URL}/metafields/{metafield_id}.json"
-        requests.put(url, headers=headers, json=data)
-    else:
-        url = CUSTOMER_METAFIELDS_URL(customer_id)
-        requests.post(url, headers=headers, json=data)
+        response = requests.post(url, headers=headers, json=data)
+    return response.status_code in [200, 201]
 
 def create_discount_code(customer_id, order_id):
     unique_code = f"DOG-{customer_id}-{order_id}"
@@ -127,32 +92,33 @@ def generate_code():
     order_id = get_order_numeric_id(raw_order_id)
 
     metafields = get_metafields(customer_id)
-    current_balance, balance_metafield_id = get_dog_dollars_balance(metafields)
+    current_balance_str, balance_id = get_metafield_value_and_id(metafields, DOG_DOLLARS_KEY)
+    current_balance = int(current_balance_str) if current_balance_str else 0
     new_balance = current_balance + earned_dog_dollars
 
-    update_dog_dollars(customer_id, new_balance, balance_metafield_id)
+    update_metafield(customer_id, DOG_DOLLARS_KEY, str(new_balance), "number_integer", balance_id)
 
-    issued_codes = []
+    existing_codes_str, codes_id = get_metafield_value_and_id(metafields, DISCOUNT_CODE_KEY)
+    existing_codes = existing_codes_str.strip().split("\n") if existing_codes_str else []
 
+    new_codes = []
     while new_balance >= 125:
         code = create_discount_code(customer_id, order_id)
         if code:
-            save_discount_code_to_customer(customer_id, code)
-            issued_codes.append(code)
+            new_codes.append(code)
             new_balance -= 125
-            update_dog_dollars(customer_id, new_balance)
         else:
-            return jsonify({
-                "success": False,
-                "dog_dollars": new_balance,
-                "error": "Failed to create discount code",
-                "codes": issued_codes
-            })
+            break
+
+    if new_codes:
+        update_metafield(customer_id, DOG_DOLLARS_KEY, str(new_balance), "number_integer")
+        all_codes = "\n".join(existing_codes + new_codes)
+        update_metafield(customer_id, DISCOUNT_CODE_KEY, all_codes, "multi_line_text_field", codes_id)
 
     return jsonify({
         "success": True,
         "dog_dollars": new_balance,
-        "codes": issued_codes
+        "codes": existing_codes + new_codes
     })
 
 if __name__ == "__main__":
