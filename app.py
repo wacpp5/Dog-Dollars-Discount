@@ -2,22 +2,24 @@ from flask import Flask, request, jsonify
 import requests
 import datetime
 import os
+import json
 
 app = Flask(__name__)
 
-# Environment variables
-SHOP_NAME = os.getenv("SHOP_NAME")
-ADMIN_API_TOKEN = os.getenv("ADMIN_API_TOKEN")
-PRICE_RULE_ID = os.getenv("PRICE_RULE_ID")
+# Load sensitive variables from environment
+SHOP_NAME = os.environ.get("SHOP_NAME")
+ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN")
+PRICE_RULE_ID = os.environ.get("PRICE_RULE_ID")
 
 # Shopify API endpoints
 SHOPIFY_API_URL = f"https://{SHOP_NAME}.myshopify.com/admin/api/2023-10"
 CUSTOMER_METAFIELDS_URL = lambda cid: f"{SHOPIFY_API_URL}/customers/{cid}/metafields.json"
+UPDATE_METAFIELD_URL = lambda metafield_id: f"{SHOPIFY_API_URL}/metafields/{metafield_id}.json"
 
 # Metafield namespace/key
 DOG_DOLLARS_NAMESPACE = "loyalty"
 DOG_DOLLARS_KEY = "dog_dollars"
-DISCOUNT_CODE_KEY = "last_discount_code"
+DISCOUNT_CODES_KEY = "discount_codes"
 
 headers = {
     "X-Shopify-Access-Token": ADMIN_API_TOKEN,
@@ -36,40 +38,28 @@ def get_metafields(customer_id):
         return response.json().get("metafields", [])
     return []
 
-def get_dog_dollars_balance(metafields):
+def get_metafield_value(metafields, key):
     for metafield in metafields:
-        if metafield["namespace"] == DOG_DOLLARS_NAMESPACE and metafield["key"] == DOG_DOLLARS_KEY:
-            return int(metafield["value"]), metafield["id"]
-    return 0, None
+        if metafield["namespace"] == DOG_DOLLARS_NAMESPACE and metafield["key"] == key:
+            return metafield["value"], metafield["id"]
+    return None, None
 
-def update_dog_dollars(customer_id, new_balance, metafield_id=None):
+def update_metafield(customer_id, key, value, metafield_id=None, type_hint="number_integer"):
     data = {
         "metafield": {
             "namespace": DOG_DOLLARS_NAMESPACE,
-            "key": DOG_DOLLARS_KEY,
-            "type": "number_integer",
-            "value": str(new_balance)
+            "key": key,
+            "type": type_hint,
+            "value": value
         }
     }
     if metafield_id:
-        url = f"{SHOPIFY_API_URL}/metafields/{metafield_id}.json"
+        url = UPDATE_METAFIELD_URL(metafield_id)
         response = requests.put(url, headers=headers, json=data)
     else:
         url = CUSTOMER_METAFIELDS_URL(customer_id)
         response = requests.post(url, headers=headers, json=data)
     return response.status_code in [200, 201]
-
-def save_discount_code_to_customer(customer_id, code):
-    data = {
-        "metafield": {
-            "namespace": DOG_DOLLARS_NAMESPACE,
-            "key": DISCOUNT_CODE_KEY,
-            "type": "single_line_text_field",
-            "value": code
-        }
-    }
-    url = CUSTOMER_METAFIELDS_URL(customer_id)
-    requests.post(url, headers=headers, json=data)
 
 def create_discount_code(customer_id, order_id):
     unique_code = f"DOG-{customer_id}-{order_id}"
@@ -103,27 +93,36 @@ def generate_code():
     customer_id = get_customer_numeric_id(raw_customer_id)
     order_id = get_order_numeric_id(raw_order_id)
 
-    # Fetch existing dog dollars
     metafields = get_metafields(customer_id)
-    current_balance, metafield_id = get_dog_dollars_balance(metafields)
+
+    current_balance, balance_id = get_metafield_value(metafields, DOG_DOLLARS_KEY)
+    current_balance = int(current_balance) if current_balance is not None else 0
     new_balance = current_balance + earned_dog_dollars
 
-    # Update dog dollars
-    update_dog_dollars(customer_id, new_balance, metafield_id)
+    update_metafield(customer_id, DOG_DOLLARS_KEY, str(new_balance), balance_id)
 
-    # Create discount if eligible
+    codes_json, codes_id = get_metafield_value(metafields, DISCOUNT_CODES_KEY)
+    codes_list = json.loads(codes_json) if codes_json else []
+
+    response_data = {"success": True, "dog_dollars": new_balance, "codes": codes_list}
+
     if new_balance >= 125:
         code = create_discount_code(customer_id, order_id)
         if code:
-            # Subtract 125 and update again
-            final_balance = new_balance - 125
-            update_dog_dollars(customer_id, final_balance, metafield_id)
-            save_discount_code_to_customer(customer_id, code)
-            return jsonify({"success": True, "code": code, "dog_dollars": final_balance})
-        else:
-            return jsonify({"success": False, "error": "Failed to create discount code", "dog_dollars": new_balance})
+            new_balance -= 125
+            update_metafield(customer_id, DOG_DOLLARS_KEY, str(new_balance), balance_id)
 
-    return jsonify({"success": True, "dog_dollars": new_balance})
+            codes_list.append(code)
+            update_metafield(customer_id, DISCOUNT_CODES_KEY, json.dumps(codes_list), codes_id, "json")
+
+            response_data["code"] = code
+            response_data["dog_dollars"] = new_balance
+            response_data["codes"] = codes_list
+        else:
+            response_data["error"] = "Failed to create discount code"
+            response_data["success"] = False
+
+    return jsonify(response_data)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
